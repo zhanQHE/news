@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WebAR 手势粒子互动系统</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --panel: rgba(8, 14, 18, 0.74);
+      --panel-strong: rgba(12, 24, 30, 0.9);
+      --line: rgba(255, 255, 255, 0.16);
+      --text: #edf8fb;
+      --muted: #9fb2b8;
+      --accent: #00f5ff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #05080a;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+    }
+
+    #camera,
+    #stage {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    #camera {
+      object-fit: cover;
+      transform: scaleX(-1);
+      opacity: 0.72;
+      filter: saturate(0.9) contrast(1.05);
+      background: #030506;
+    }
+
+    #stage {
+      z-index: 2;
+    }
+
+    .hud {
+      position: fixed;
+      z-index: 4;
+      top: 16px;
+      left: 16px;
+      width: min(360px, calc(100vw - 32px));
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      backdrop-filter: blur(14px);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+    }
+
+    .hud__top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .title {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+    }
+
+    .title strong {
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .title span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.2;
+    }
+
+    .badge {
+      flex: 0 0 auto;
+      min-width: 74px;
+      padding: 6px 8px;
+      border: 1px solid rgba(0, 245, 255, 0.36);
+      border-radius: 8px;
+      color: #d6feff;
+      background: rgba(0, 245, 255, 0.12);
+      text-align: center;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+
+    .meters {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .meter {
+      display: grid;
+      grid-template-columns: 58px 1fr 38px;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .bar {
+      height: 6px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    .bar span {
+      display: block;
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--accent);
+      box-shadow: 0 0 18px color-mix(in srgb, var(--accent), white 20%);
+      transition: width 120ms linear;
+    }
+
+    .palette {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .swatch {
+      width: 100%;
+      aspect-ratio: 1;
+      border: 1px solid rgba(255, 255, 255, 0.26);
+      border-radius: 8px;
+      cursor: pointer;
+      box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.24);
+    }
+
+    .swatch[aria-pressed="true"] {
+      outline: 2px solid #fff;
+      outline-offset: 2px;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    button.action {
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--text);
+      background: var(--panel-strong);
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    button.action:hover {
+      border-color: rgba(255, 255, 255, 0.32);
+    }
+
+    .notice {
+      position: fixed;
+      z-index: 3;
+      right: 16px;
+      bottom: 16px;
+      max-width: min(420px, calc(100vw - 32px));
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(7, 10, 12, 0.72);
+      color: #dbecef;
+      backdrop-filter: blur(12px);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    @media (max-width: 520px) {
+      .hud {
+        top: 10px;
+        left: 10px;
+        width: calc(100vw - 20px);
+        padding: 12px;
+      }
+
+      .notice {
+        left: 10px;
+        right: 10px;
+        bottom: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <video id="camera" autoplay muted playsinline></video>
+  <div id="stage"></div>
+
+  <section class="hud" aria-label="状态界面">
+    <div class="hud__top">
+      <div class="title">
+        <strong>WebAR 粒子手势</strong>
+        <span id="statusText">等待摄像头</span>
+      </div>
+      <div class="badge" id="gestureBadge">IDLE</div>
+    </div>
+
+    <div class="meters">
+      <div class="meter">
+        <span>手速</span>
+        <div class="bar"><span id="speedBar"></span></div>
+        <span id="speedText">0.00</span>
+      </div>
+      <div class="meter">
+        <span>深度</span>
+        <div class="bar"><span id="depthBar"></span></div>
+        <span id="depthText">1.00</span>
+      </div>
+      <div class="meter">
+        <span>风暴</span>
+        <div class="bar"><span id="stormBar"></span></div>
+        <span id="stormText">0%</span>
+      </div>
+    </div>
+
+    <div class="palette" aria-label="粒子颜色">
+      <button class="swatch" aria-label="青色" aria-pressed="true" data-color="#00f5ff" style="background:#00f5ff"></button>
+      <button class="swatch" aria-label="蓝色" aria-pressed="false" data-color="#4f8cff" style="background:#4f8cff"></button>
+      <button class="swatch" aria-label="绿色" aria-pressed="false" data-color="#4dff9a" style="background:#4dff9a"></button>
+      <button class="swatch" aria-label="粉色" aria-pressed="false" data-color="#ff5cc8" style="background:#ff5cc8"></button>
+      <button class="swatch" aria-label="金色" aria-pressed="false" data-color="#ffd166" style="background:#ffd166"></button>
+      <button class="swatch" aria-label="白色" aria-pressed="false" data-color="#f7fbff" style="background:#f7fbff"></button>
+    </div>
+
+    <div class="actions">
+      <button class="action" id="enterFull">全屏</button>
+      <button class="action" id="exitFull">退出全屏</button>
+    </div>
+  </section>
+
+  <div class="notice" id="notice">请允许摄像头权限。张手、剪刀手、握拳、伸食指、竖大拇指会切换形态；快速挥手会吹散粒子。</div>
+
+  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://unpkg.com/@mediapipe/hands/hands.js"></script>
+  <script>
+    (() => {
+      const PARTICLE_COUNT = 16000;
+      const SHAPE_COUNT = 5;
+      const WORLD_SCALE = 5.2;
+      const tmpCanvas = document.createElement('canvas');
+      const tmpCtx = tmpCanvas.getContext('2d', { willReadFrequently: true });
+
+      const video = document.getElementById('camera');
+      const stage = document.getElementById('stage');
+      const statusText = document.getElementById('statusText');
+      const gestureBadge = document.getElementById('gestureBadge');
+      const speedBar = document.getElementById('speedBar');
+      const depthBar = document.getElementById('depthBar');
+      const stormBar = document.getElementById('stormBar');
+      const speedText = document.getElementById('speedText');
+      const depthText = document.getElementById('depthText');
+      const stormText = document.getElementById('stormText');
+      const notice = document.getElementById('notice');
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      stage.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.1, 120);
+      camera.position.set(0, 0, 12);
+
+      const positions = new Float32Array(PARTICLE_COUNT * 3);
+      const velocities = new Float32Array(PARTICLE_COUNT * 3);
+      const accelerations = new Float32Array(PARTICLE_COUNT * 3);
+      const seeds = new Float32Array(PARTICLE_COUNT);
+      const targets = Array.from({ length: SHAPE_COUNT }, () => new Float32Array(PARTICLE_COUNT * 3));
+      const currentTarget = new Float32Array(PARTICLE_COUNT * 3);
+
+      const geometry = new THREE.BufferGeometry();
+      const material = new THREE.PointsMaterial({
+        color: new THREE.Color('#00f5ff'),
+        size: 0.026,
+        transparent: true,
+        opacity: 0.88,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+
+      let activeShape = 0;
+      let desiredScale = 1;
+      let systemScale = 1;
+      let stormEnergy = 0;
+      let lastTime = performance.now();
+      let lastPalm = null;
+      let lastGestureAt = 0;
+      let handPoint = new THREE.Vector3();
+      let hasHand = false;
+
+      const gestureNames = ['张手', '剪刀手', '握拳', '食指', '大拇指'];
+      const shapeLabels = ['SPHERE', 'TEXT', 'RING', 'STAR', 'HEART'];
+
+      initParticles();
+      buildTargets();
+      switchShape(0, true);
+
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const particles = new THREE.Points(geometry, material);
+      scene.add(particles);
+
+      function randomSigned() {
+        return Math.random() * 2 - 1;
+      }
+
+      function initParticles() {
+        for (let i = 0; i < PARTICLE_COUNT; i += 1) {
+          const k = i * 3;
+          const r = Math.cbrt(Math.random()) * 3.8;
+          const a = Math.random() * Math.PI * 2;
+          const z = randomSigned() * r;
+          const q = Math.sqrt(Math.max(0, r * r - z * z));
+          positions[k] = Math.cos(a) * q;
+          positions[k + 1] = Math.sin(a) * q;
+          positions[k + 2] = z;
+          velocities[k] = randomSigned() * 0.04;
+          velocities[k + 1] = randomSigned() * 0.04;
+          velocities[k + 2] = randomSigned() * 0.04;
+          seeds[i] = Math.random() * 1000;
+        }
+      }
+
+      function buildTargets() {
+        buildSphere(targets[0]);
+        buildText(targets[1], '我是 zhanQHE');
+        buildRing(targets[2]);
+        buildStar(targets[3]);
+        buildHeart(targets[4]);
+      }
+
+      function buildSphere(out) {
+        const golden = Math.PI * (3 - Math.sqrt(5));
+        for (let i = 0; i < PARTICLE_COUNT; i += 1) {
+          const k = i * 3;
+          const y = 1 - (i / (PARTICLE_COUNT - 1)) * 2;
+          const radius = Math.sqrt(1 - y * y);
+          const theta = golden * i;
+          const shell = 2.72 + Math.sin(i * 0.027) * 0.08;
+          out[k] = Math.cos(theta) * radius * shell;
+          out[k + 1] = y * shell;
+          out[k + 2] = Math.sin(theta) * radius * shell;
+        }
+      }
+
+      function buildRing(out) {
+        for (let i = 0; i < PARTICLE_COUNT; i += 1) {
+          const k = i * 3;
+          const u = i / PARTICLE_COUNT;
+          const a = u * Math.PI * 2 * 7.0;
+          const tube = 0.34 + Math.sin(i * 0.031) * 0.08;
+          const ring = 2.25 + Math.sin(i * 0.017) * 0.12;
+          const b = seeds[i] * Math.PI * 2;
+          out[k] = (ring + Math.cos(b) * tube) * Math.cos(a);
+          out[k + 1] = Math.sin(b) * tube * 1.25;
+          out[k + 2] = (ring + Math.cos(b) * tube) * Math.sin(a);
+        }
+      }
+
+      function buildStar(out) {
+        for (let i = 0; i < PARTICLE_COUNT; i += 1) {
+          const k = i * 3;
+          const a = (i / PARTICLE_COUNT) * Math.PI * 2 * 5 + seeds[i] * 0.002;
+          const point = Math.floor(((a / (Math.PI * 2)) * 5) % 5);
+          const local = ((a / (Math.PI * 2)) * 5) % 1;
+          const edge = Math.abs(local - 0.5) * 2;
+          const radius = THREE.MathUtils.lerp(1.02, 3.05, edge);
+          const jitter = (Math.random() - 0.5) * 0.18;
+          out[k] = Math.cos(a) * (radius + jitter);
+          out[k + 1] = Math.sin(a) * (radius + jitter);
+          out[k + 2] = (Math.random() - 0.5) * (0.55 + point * 0.025);
+        }
+      }
+
+      function buildHeart(out) {
+        for (let i = 0; i < PARTICLE_COUNT; i += 1) {
+          const k = i * 3;
+          const t = (i / PARTICLE_COUNT) * Math.PI * 2 * 10 + seeds[i] * 0.001;
+          const x = 16 * Math.pow(Math.sin(t), 3);
+          const y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+          const layer = Math.random();
+          const s = 0.15 + layer * 0.012;
+          out[k] = x * s + randomSigned() * 0.18;
+          out[k + 1] = y * s - 0.35 + randomSigned() * 0.18;
+          out[k + 2] = randomSigned() * (0.35 + layer * 0.75);
+        }
+      }
+
+      function buildText(out, text) {
+        tmpCanvas.width = 1024;
+        tmpCanvas.height = 256;
+        tmpCtx.clearRect(0, 0, tmpCanvas.width, tmpCanvas.height);
+        tmpCtx.fillStyle = '#fff';
+        tmpCtx.textAlign = 'center';
+        tmpCtx.textBaseline = 'middle';
+        tmpCtx.font = '800 116px "Microsoft YaHei", "PingFang SC", sans-serif';
+        tmpCtx.fillText(text, tmpCanvas.width / 2, tmpCanvas.height / 2 + 2);
+
+        const image = tmpCtx.getImageData(0, 0, tmpCanvas.width, tmpCanvas.height).data;
+        const points = [];
+        for (let y = 0; y < tmpCanvas.height; y += 3) {
+          for (let x = 0; x < tmpCanvas.width; x += 3) {
+            if (image[(y * tmpCanvas.width + x) * 4 + 3] > 64) {
+              points.push([(x / tmpCanvas.width - 0.5) * 7.7, -(y / tmpCanvas.height - 0.5) * 2.1, 0]);
+            }
+          }
+        }
+
+        for (let i = 0; i < PARTICLE_COUNT; i += 1) {
+          const k = i * 3;
+          const p = points[(i * 37) % points.length];
+          out[k] = p[0] + randomSigned() * 0.035;
+          out[k + 1] = p[1] + randomSigned() * 0.035;
+          out[k + 2] = randomSigned() * 0.22;
+        }
+      }
+
+      function switchShape(index, instant = false) {
+        if (index === activeShape && !instant) return;
+        activeShape = index;
+        currentTarget.set(targets[index]);
+        gestureBadge.textContent = shapeLabels[index];
+        statusText.textContent = gestureNames[index];
+        lastGestureAt = performance.now();
+        if (!instant) explode(2.8);
+      }
+
+      function explode(power) {
+        for (let i = 0; i < PARTICLE_COUNT; i += 1) {
+          const k = i * 3;
+          const x = positions[k];
+          const y = positions[k + 1];
+          const z = positions[k + 2];
+          const inv = 1 / Math.max(0.28, Math.sqrt(x * x + y * y + z * z));
+          velocities[k] += x * inv * power * (0.35 + Math.random());
+          velocities[k + 1] += y * inv * power * (0.35 + Math.random());
+          velocities[k + 2] += z * inv * power * (0.35 + Math.random()) + randomSigned() * 0.6;
+        }
+      }
+
+      function curlOf(landmarks, tip, pip, mcp) {
+        const wrist = landmarks[0];
+        const dTip = distance2(landmarks[tip], wrist);
+        const dPip = distance2(landmarks[pip], wrist);
+        const dMcp = distance2(landmarks[mcp], wrist);
+        return dTip < dPip || dTip < dMcp * 1.18;
+      }
+
+      function distance2(a, b) {
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        return Math.sqrt(dx * dx + dy * dy);
+      }
+
+      function palmArea(landmarks) {
+        const ids = [0, 5, 9, 13, 17];
+        let minX = 1;
+        let minY = 1;
+        let maxX = 0;
+        let maxY = 0;
+        ids.forEach((id) => {
+          const p = landmarks[id];
+          minX = Math.min(minX, p.x);
+          minY = Math.min(minY, p.y);
+          maxX = Math.max(maxX, p.x);
+          maxY = Math.max(maxY, p.y);
+        });
+        return Math.max(0.001, (maxX - minX) * (maxY - minY));
+      }
+
+      function classifyGesture(landmarks) {
+        const thumbOpen = distance2(landmarks[4], landmarks[17]) > distance2(landmarks[2], landmarks[17]) * 1.12;
+        const indexCurl = curlOf(landmarks, 8, 6, 5);
+        const middleCurl = curlOf(landmarks, 12, 10, 9);
+        const ringCurl = curlOf(landmarks, 16, 14, 13);
+        const pinkyCurl = curlOf(landmarks, 20, 18, 17);
+        const indexOpen = !indexCurl;
+        const middleOpen = !middleCurl;
+        const ringOpen = !ringCurl;
+        const pinkyOpen = !pinkyCurl;
+        const openCount = [thumbOpen, indexOpen, middleOpen, ringOpen, pinkyOpen].filter(Boolean).length;
+        const wrist = landmarks[0];
+        const thumbTip = landmarks[4];
+        const thumbUp = thumbOpen && thumbTip.y < wrist.y - 0.12 && indexCurl && middleCurl && ringCurl && pinkyCurl;
+
+        if (thumbUp) return 4;
+        if (indexOpen && middleOpen && ringCurl && pinkyCurl) return 1;
+        if (indexOpen && middleCurl && ringCurl && pinkyCurl) return 3;
+        if (openCount <= 1) return 2;
+        return 0;
+      }
+
+      function onHandsResults(results) {
+        if (!results.multiHandLandmarks || !results.multiHandLandmarks.length) {
+          hasHand = false;
+          statusText.textContent = '未检测到手';
+          stormEnergy *= 0.94;
+          return;
+        }
+
+        hasHand = true;
+        const landmarks = results.multiHandLandmarks[0];
+        const palm = {
+          x: (landmarks[0].x + landmarks[5].x + landmarks[17].x) / 3,
+          y: (landmarks[0].y + landmarks[5].y + landmarks[17].y) / 3,
+          t: performance.now()
+        };
+        handPoint.set((0.5 - palm.x) * WORLD_SCALE * 1.7, (0.5 - palm.y) * WORLD_SCALE, 0);
+
+        if (lastPalm) {
+          const dt = Math.max(16, palm.t - lastPalm.t) / 1000;
+          const speed = Math.hypot(palm.x - lastPalm.x, palm.y - lastPalm.y) / dt;
+          const normalized = Math.min(1, speed / 2.1);
+          speedBar.style.width = `${normalized * 100}%`;
+          speedText.textContent = speed.toFixed(2);
+          if (speed > 1.15) {
+            stormEnergy = Math.min(1, stormEnergy + (speed - 1.0) * 0.24);
+            blowFromHand(speed);
+          }
+        }
+        lastPalm = palm;
+
+        const area = palmArea(landmarks);
+        desiredScale = THREE.MathUtils.clamp(0.72 + area * 12.5, 0.74, 2.15);
+        depthBar.style.width = `${THREE.MathUtils.clamp((desiredScale - 0.74) / 1.41, 0, 1) * 100}%`;
+        depthText.textContent = desiredScale.toFixed(2);
+
+        const gesture = classifyGesture(landmarks);
+        if (gesture !== activeShape && performance.now() - lastGestureAt > 450) {
+          switchShape(gesture);
+        }
+      }
+
+      function blowFromHand(speed) {
+        const power = Math.min(3.8, speed * 1.45);
+        for (let i = 0; i < PARTICLE_COUNT; i += 1) {
+          const k = i * 3;
+          const dx = positions[k] - handPoint.x;
+          const dy = positions[k + 1] - handPoint.y;
+          const d2 = dx * dx + dy * dy + 0.34;
+          const force = power / d2;
+          velocities[k] += dx * force * 0.018 + randomSigned() * 0.018 * power;
+          velocities[k + 1] += dy * force * 0.018 + randomSigned() * 0.018 * power;
+          velocities[k + 2] += randomSigned() * 0.028 * power;
+        }
+      }
+
+      function update(dt) {
+        stormEnergy *= Math.pow(0.9, dt * 6);
+        systemScale += (desiredScale - systemScale) * (1 - Math.pow(0.02, dt));
+        particles.scale.setScalar(systemScale);
+        particles.rotation.y += dt * (0.08 + stormEnergy * 0.38);
+        particles.rotation.x += dt * 0.035;
+
+        const ageBoost = Math.max(0, 1 - (performance.now() - lastGestureAt) / 900);
+        const stiffness = 8.5 + ageBoost * 5.5;
+        const damping = 0.86 - stormEnergy * 0.08;
+        const swirl = 0.58 + stormEnergy * 1.4;
+
+        for (let i = 0; i < PARTICLE_COUNT; i += 1) {
+          const k = i * 3;
+          const px = positions[k];
+          const py = positions[k + 1];
+          const pz = positions[k + 2];
+          const tx = currentTarget[k];
+          const ty = currentTarget[k + 1];
+          const tz = currentTarget[k + 2];
+
+          let ax = (tx - px) * stiffness;
+          let ay = (ty - py) * stiffness;
+          let az = (tz - pz) * stiffness;
+
+          const wave = Math.sin(seeds[i] + performance.now() * 0.0015);
+          ax += -py * 0.035 * swirl + wave * 0.02;
+          ay += px * 0.035 * swirl + Math.cos(seeds[i] * 1.7 + performance.now() * 0.001) * 0.02;
+          az += Math.sin(px + py + seeds[i]) * 0.018;
+
+          if (hasHand && stormEnergy > 0.02) {
+            const dx = px - handPoint.x;
+            const dy = py - handPoint.y;
+            const d = Math.max(0.35, Math.sqrt(dx * dx + dy * dy));
+            ax += (dx / d) * stormEnergy * 2.5 / d;
+            ay += (dy / d) * stormEnergy * 2.5 / d;
+          }
+
+          accelerations[k] = ax;
+          accelerations[k + 1] = ay;
+          accelerations[k + 2] = az;
+
+          velocities[k] = (velocities[k] + ax * dt) * Math.pow(damping, dt * 60);
+          velocities[k + 1] = (velocities[k + 1] + ay * dt) * Math.pow(damping, dt * 60);
+          velocities[k + 2] = (velocities[k + 2] + az * dt) * Math.pow(damping, dt * 60);
+
+          positions[k] += velocities[k] * dt;
+          positions[k + 1] += velocities[k + 1] * dt;
+          positions[k + 2] += velocities[k + 2] * dt;
+        }
+
+        geometry.attributes.position.needsUpdate = true;
+        stormBar.style.width = `${stormEnergy * 100}%`;
+        stormText.textContent = `${Math.round(stormEnergy * 100)}%`;
+      }
+
+      function animate(now) {
+        const dt = Math.min(0.033, (now - lastTime) / 1000 || 0.016);
+        lastTime = now;
+        update(dt);
+        renderer.render(scene, camera);
+        requestAnimationFrame(animate);
+      }
+
+      async function startHands() {
+        if (!window.Hands || !window.Camera) {
+          statusText.textContent = '资源加载失败';
+          notice.textContent = 'Three.js 或 MediaPipe Hands 未加载，请确认 unpkg 可以访问。';
+          return;
+        }
+
+        const hands = new Hands({
+          locateFile: (file) => `https://unpkg.com/@mediapipe/hands/${file}`
+        });
+        hands.setOptions({
+          maxNumHands: 1,
+          modelComplexity: 1,
+          minDetectionConfidence: 0.72,
+          minTrackingConfidence: 0.72
+        });
+        hands.onResults(onHandsResults);
+
+        const mediaCamera = new Camera(video, {
+          onFrame: async () => {
+            await hands.send({ image: video });
+          },
+          width: 1280,
+          height: 720
+        });
+
+        try {
+          await mediaCamera.start();
+          statusText.textContent = '等待手势';
+          notice.textContent = '摄像头已连接。试试张手、剪刀手、握拳、伸食指、竖大拇指和快速挥手。';
+        } catch (error) {
+          statusText.textContent = '摄像头不可用';
+          notice.textContent = '摄像头启动失败，粒子系统仍可作为视觉演示运行。';
+          console.warn(error);
+        }
+      }
+
+      function resize() {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h);
+      }
+
+      document.querySelectorAll('.swatch').forEach((button) => {
+        button.addEventListener('click', () => {
+          document.querySelectorAll('.swatch').forEach((item) => item.setAttribute('aria-pressed', 'false'));
+          button.setAttribute('aria-pressed', 'true');
+          const color = button.dataset.color;
+          material.color.set(color);
+          document.documentElement.style.setProperty('--accent', color);
+        });
+      });
+
+      document.getElementById('enterFull').addEventListener('click', () => {
+        document.documentElement.requestFullscreen?.();
+      });
+
+      document.getElementById('exitFull').addEventListener('click', () => {
+        document.exitFullscreen?.();
+      });
+
+      window.addEventListener('resize', resize);
+      requestAnimationFrame(animate);
+      startHands();
+    })();
+  </script>
+</body>
+</html>
